@@ -42,7 +42,7 @@ int sanitationTime = 1; //in Minutes. default value is 15
 //Libraries
 #include <Wire.h>
 #include <DS3231.h>
-#include <EEPROM.h>
+#include <EEPROMex.h>
 
 //Setting up time clock
 DS3231 clock;
@@ -62,8 +62,12 @@ const int buttonPin = 2;
 const int soundPin = 6;
 const int motionPin = 7;
 
+//EEPROM Reading and Writing ints
+long cycleCount;//Number of times Unit has run a UV Cleaning
+int eepromCycleAddressStorage = 0; //Takes up 4 Bytes. Next avalible Storage location is 4
+
+
 //starting board int values
-int cycleCount = 1;//Number of times Unit has run a UV Cleaning
 int red = 0;
 int green = 0;
 int blue = 0;
@@ -93,10 +97,13 @@ void setup() {
   clock.begin();
   clock.setDateTime(__DATE__, __TIME__);
   dt = clock.getDateTime();
-  Serial.println(" ");
-  Serial.println(" ");
   Serial.print(unitName);
   Serial.print(" - Booting at "); timeAndDate;
+
+  //Update the Number of cycles ran from Local Memory
+  delay(20);
+  cycleCount = EEPROM.readLong(eepromCycleAddressStorage);
+  delay(20);
 
   //Set Pin Modes
   pinMode(gLEDPin, OUTPUT);
@@ -422,8 +429,6 @@ void uvLampStrike() {
   }
 }
 
-
-
 void motionFault() {
   ERROR03;
   relay = LOW;
@@ -507,7 +512,13 @@ void resetUnitToStart() {
   green = 100;
   blue = 0;
   LEDU;
+
+  //Update Cycle Count to EEPROM
+  delay(20);
   cycleCount++;
+  EEPROM.writeLong(eepromCycleAddressStorage, cycleCount++);
+  delay(20);
+  
   countUpSensorCheck = 0;
   Serial.println(" ");
   Serial.println(" ");
