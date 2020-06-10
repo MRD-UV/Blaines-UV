@@ -12,7 +12,7 @@
 #define ERROR03 Serial.println("ERROR 03. Unit has detected motion. Cleaning Cycle has been canceled. Please press and hold the button to confirm.");
 
 //Once UV Lamp is stuck, Button is pressed
-#define ERROR04 Serial.println("ERROR 04. Unit has detected a button press. Cleaning Cycle has been canceled. Please press and hold the button to confirm.");
+#define ERROR04 Serial.println("ERROR 04. Unit has detected a button press. Cleaning Cycle has been canceled.");
 
 
 
