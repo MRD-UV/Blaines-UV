@@ -1,18 +1,58 @@
+//Error Codes//
+//If motion is sensed more times that startUVCycle will allow
+#define ERROR00 Serial.print("ERROR 00 - "); Serial.print(unitName); Serial.print(" has attempted to start a cleaning cycle "); Serial.print(numberOfTrips); Serial.print(" time(s). Start cleaning cycle again and evacuate room within "); Serial.print((((delayTime * numberOfTrips) * 60000) + (7000 * 3)) / 10000); Serial.println(" seconds of triggering a cleaning cycle. Please press and hold the button to confirm.");
+
+//If button is pressed durring the startUVCycle
+#define ERROR01 Serial.println("ERROR 01 - Button was pressed during the startup. Most likely the unit was accidentaly triggered and then cancled.");
+
+//If button is pressed durring the sensorCheck
+#define ERROR02 Serial.println("ERROR 02 - Button was pressed during the Sensor Check. Most likely the unit was accidentaly triggered and then cancled.");
+
+//Once UV Lamp is struck, Motion is read
+#define ERROR03 Serial.println("ERROR 03. Unit has detected motion. Cleaning Cycle has been canceled. Please press and hold the button to confirm.");
+
+//Once UV Lamp is stuck, Button is pressed
+#define ERROR04 Serial.println("ERROR 04. Unit has detected a button press. Cleaning Cycle has been canceled. Please press and hold the button to confirm.");
+
+
+
+//EDITABLE VARIABLES//
+//Name of Device
+char *unitName = {"Cabin 1422"};
+
+//Buzzer Tone
+int toneLow = 200;
+int toneHigh = 800;
+
+//Button Press Time
+int buttonPressTime = 4;//Default value is 4. Must be >2
+
+//Sensors Checks
+int delayTime = 4; //in Seconds. This is the time to leave the room once button has been triggered =,
+int numberOfTrips = 3;// default value is 3
+
+//UV Lamp Strikes
+int sanitationTime = 1; //in Minutes. default value is 15
+
+
+
+//DO NOT EDIT BELOW THIS LINE
+//-------------------------------------------------------------------------------------------------------
+
 //Libraries
 #include <Wire.h>
 #include <DS3231.h>
+#include <EEPROM.h>
 
 //Setting up time clock
 DS3231 clock;
-RTCDateTime realClock;
+RTCDateTime dt;
 
 //defines
 #define LEDU analogWrite(rLEDPin, red); analogWrite(gLEDPin, green);  analogWrite(bLEDPin, blue);
-#define holdTime buttonPressTime
-#define dt realClock
-#define buttonU button=digitalRead(buttonPin); 
-#define buttonBreakaway buttonU; if(button > 0) {lastButton = 1;}
+#define timeAndDate Serial.print(dt.year); Serial.print("-"); Serial.print(dt.month); Serial.print("-"); Serial.print(dt.day); Serial.print(" "); Serial.print(dt.hour); Serial.print(":"); Serial.print(dt.minute); Serial.print(":"); Serial.println(dt.second);
 
+//NON EDITABLE VARIABLES//
 //const ints for Pin Mode Setup
 const int gLEDPin = 9;
 const int bLEDPin = 10;
@@ -23,38 +63,27 @@ const int soundPin = 6;
 const int motionPin = 7;
 
 //starting board int values
+int cycleCount = 1;//Number of times Unit has run a UV Cleaning
 int red = 0;
 int green = 0;
 int blue = 0;
 int relay = LOW;
 int sound = 0;
-int tonerL = 200;
-int tonerH = 800;
-int bFlash = 0;
 
-//Blue flashing light low and high values
-int bHigh = 240;
-int bLow = 50;
-int rHigh = 240;
-int rLow = 50;
-
-//Button Press Ints
+//Button Press Arrguments
 int lastButton = 0;
-long int onTime = 0;
-long int pressTime = 0;
-long int releaseTime = 0;
-int buttonPressTime = 4;
-int doubleTime = 500;
+long int timeFirst = 0;
+long int timeSecond = 0;
+long int timeThird = 0;
 int hold = 0;
 int button = 0;
 
 //Saftey Check Variables
 int motion = 0;
-int delayTime = 5;
-int numberOfTrips = (30/delayTime);
-int countUpSensorCheck = 0;
+int countUpSensorCheck = 1;
 int countUpStartUVCycle = 0;
-int sanitationTime = 15; //in Minutes
+int safteyTriggerMotion = 0;
+int safteyTriggerButton = 0;
 
 void setup() {
   //begin Serial Communication
@@ -64,13 +93,10 @@ void setup() {
   clock.begin();
   clock.setDateTime(__DATE__, __TIME__);
   dt = clock.getDateTime();
-  Serial.print("Boot Date: ");
-  Serial.print(dt.year);   Serial.print("-");
-  Serial.print(dt.month);  Serial.print("-");
-  Serial.print(dt.day);    Serial.print(" ");
-  Serial.print(dt.hour);   Serial.print(":");
-  Serial.print(dt.minute); Serial.print(":");
-  Serial.print(dt.second); Serial.println("");
+  Serial.println(" ");
+  Serial.println(" ");
+  Serial.print(unitName);
+  Serial.print(" - Booting at "); timeAndDate;
 
   //Set Pin Modes
   pinMode(gLEDPin, OUTPUT);
@@ -84,22 +110,22 @@ void setup() {
   //Test Cycle for Colors
   red = 255;
   LEDU;
-  delay(500);
+  delay(250);
   red = 0;
   green = 255;
   LEDU;
-  delay(500);
+  delay(250);
   green = 0;
   blue = 255;
   LEDU;
-  delay(500);
+  delay(250);
   blue = 0;
   LEDU;
 
   //Test Cycle for Buzzer
-  tone(soundPin, tonerL, 1000);
-  delay(1100);
-
+  tone(soundPin, toneLow, 1000);
+  delay(600);
+  noTone(soundPin);
 
   //Post Startup holding state
   red = 0;
@@ -109,55 +135,60 @@ void setup() {
 }
 
 void loop() {
+  button = digitalRead(buttonPin);
+  delay(10);
+  dt = clock.getDateTime();
 
-  //rereading the clock
-  dt = clock.getDateTime(); 
-
-  //waiting for button press
-  buttonU;
-  onTime = dt.unixtime;
-  delay(5);
-
-  //First Button Press  
+  //First Button Press
   if (button == 1 && lastButton == 0) {
-    pressTime = onTime;
+    timeSecond = dt.unixtime;
+    delay(5);
+    Serial.print(unitName);
+    Serial.print(" - Button pressed at "); timeAndDate;
     lastButton = 1;
   }
-  
+
   //Held
   if (button == 1 && lastButton == 1) {
-    if ((onTime - pressTime) > holdTime) {
+    timeFirst = dt.unixtime;
+    if ((timeFirst - timeSecond) >= buttonPressTime) {
       hold = 1;
-      tone(soundPin, tonerL);
+      tone(soundPin, toneLow);
       red = 150;
       green = 0;
     }
-      else {
-        tone(soundPin, tonerH);
-        red = 150;
-        green = 50;
-        LEDU;
-      }
+    else {
+      tone(soundPin, toneHigh);
+      red = 150;
+      green = 50;
+      LEDU;
     }
-    LEDU;
+  }
+  LEDU;
 
   //Release
   if (button == 0 && lastButton == 1) {
     if (hold != 1) {
+
       noTone(soundPin);
+      timeFirst = 0;
+      timeSecond = 0;
       red = 0 ;
       green = 100;
       lastButton = 0;
       LEDU;
     }
     else {
-      Serial.println("Beginning UVC Clean Startup");
+      Serial.print(unitName);
+      Serial.print(" - Beginning UVC Cycle");
+      Serial.print(" at "); timeAndDate;
+      timeFirst = 0;
+      timeSecond = 0;
       red = 0;
       green = 0;
       blue = 255;
       hold = 0;
-      lastButton = 0;
-      releaseTime = dt.unixtime;
+      timeThird = dt.unixtime;
       LEDU;
       startUVCycle();
     }
@@ -165,41 +196,94 @@ void loop() {
 }
 
 
-void startUVCycle(){
-  if (countUpSensorCheck != numberOfTrips){
+void startUVCycle() {
+  lastButton = 0;
+  safteyTriggerButton = 0;
+
+  //Check to see how many times the unit has tried to start up.
+  if (countUpSensorCheck < (numberOfTrips + 1)) {
+
+    //report number of attempts
+    Serial.print(unitName); Serial.print(" - TN "); Serial.print(cycleCount);
+    Serial.print(" - Checking Room Conditions. Attempt ");
+    Serial.print(countUpSensorCheck);
+    Serial.print(" of ");
+    Serial.println(numberOfTrips);
     delay(100);
-      do {
-        for (blue = 255; blue >= 05; blue--) {
-          tone(soundPin, tonerH);
-          LEDU;
-          buttonU;
-          buttonBreakaway;
-          delay(2);
+
+    //Warning light to exit the room
+    do {
+
+      //LED fades down
+      for (blue = 255; blue >= 05; blue--) {//DO NOT CHANGE LED LEVELS
+        tone(soundPin, toneHigh);
+        LEDU;
+        delay(2);//DO NOT CHANGE DELAY TIME
+
+        //Check Button Status
+        button = digitalRead(buttonPin);
+        if (button > 0) {
+          lastButton = 1;
         }
-        for (blue = 05; blue <= 254; blue++) {
-          tone(soundPin, tonerL);
-          LEDU;
-          buttonU;
-          buttonBreakaway;
-          delay(2);
-          }
-        if(lastButton == 1){
+
+        //Check Breakaway Status from 'LED fades down' based on button
+        if (lastButton == 1) {
+          safteyTriggerButton = 1;
           break;
         }
-        else{
-        countUpStartUVCycle++;
+      }
+
+      //LED fades up
+      for (blue = 05; blue <= 254; blue++) {//DO NOT CHANGE LED LEVELS
+        tone(soundPin, toneLow);
+        LEDU;
+        delay(2);//DO NOT CHANGE DELAY TIME
+
+        //Check Button Status
+        button = digitalRead(buttonPin);
+        if (button > 0) {
+          lastButton = 1;
+        }
+
+        //Check Breakaway Status from 'LED fades up' based on button
+        if (lastButton == 1) {
+          break;
         }
       }
-      while (countUpStartUVCycle != delayTime);
-      if(lastButton == 1){
-        cancledUVCycle();
+
+      //Check Breakaway Status from 'Warning Light to exit the room' based on button status
+      if (safteyTriggerButton == 1) {
+        break;
       }
+
+      //Add one to the counter
       else {
-        noTone(soundPin);
-        sensorCheck();
+        countUpStartUVCycle++;
       }
+    }
+
+    //Checking the counter vs the delay time. If it fails, return to the DO command
+    while (countUpStartUVCycle != delayTime);
+    //Again, checking the button status
+    if (safteyTriggerButton == 1) {
+      countUpSensorCheck = 0;
+      safteyTriggerButton - 0;
+      Serial.print(unitName); Serial.print(" - TN "); Serial.print(cycleCount); Serial.print(" - ");
+      ERROR01;
+      resetUnitToStart();
+    }
+
+    //Move to the next step and check sensors
+    else {
+      sensorCheck();
+    }
   }
+
+  //If unit has tried to start a cleanning cycle too many times it call this attempt a failure and cancled the cleaning cycle
   else {
+    countUpSensorCheck = 0;
+    noTone(soundPin);
+    ERROR00;
     cancledUVCycle();
   }
 }
@@ -207,60 +291,215 @@ void startUVCycle(){
 void sensorCheck() {
   //reset Int from previous
   countUpStartUVCycle = 0;
-
-int safteyTrigger = 0;
+  int upperTen = 0;
 
   //beging dectection loop
-  for (long int upperTen = 0; upperTen <= 7000; upperTen++) {
-    buttonU;
+  for (upperTen = 0; upperTen <= 7000; upperTen++) {
+    button = digitalRead(buttonPin);
     motion = digitalRead(motionPin);
-    if(motion == 1){
-      safteyTrigger = 1;
+    if (motion == 1) {
+      safteyTriggerMotion = 1;
     }
-    if(button == 1){
-      safteyTrigger = 1;
+    if (button == 1) {
+      safteyTriggerButton = 1;
     }
     delay(1);
-  }
-  if(safteyTrigger != 1){
-    lastButton = 0;
-    motion = 0;
-    uvLampStrike();
+    if (safteyTriggerButton == 1) {
+      break;
     }
+  }
+  if (safteyTriggerButton == 1) {
+    upperTen = 0;
+    Serial.print(unitName); Serial.print(" - TN "); Serial.print(cycleCount); Serial.print(" - ");
+    ERROR02;
+    noTone(soundPin);
+    resetUnitToStart();
+  }
   else {
-    countUpSensorCheck++;
-    lastButton = 0;
-    motion = 0;
-    startUVCycle();
+    //If motion has not been sensed
+    if (safteyTriggerMotion != 0) {
+      countUpSensorCheck++;
+      lastButton = 0;
+      safteyTriggerMotion = 0;
+      motion = 0;
+      startUVCycle();
+    }
+    //If motion has been sensed
+    else {
+      countUpSensorCheck = 0;
+      lastButton = 0;
+      motion = 0;
+      safteyTriggerMotion = 0;
+      noTone(soundPin);
+      Serial.print(unitName); Serial.print(" - TN "); Serial.print(cycleCount); Serial.print(" - ");
+      Serial.println("Room conditions are clear.");
+      uvLampStrike();
+    }
   }
 }
+
+
+void uvLampStrike() {
+  //UV Lamp Strikes
+  long int sanitationForm = ((sanitationTime * 60) / 4);
+  long int countUp = 0;
+
+  //Serial Print Commands
+  Serial.print(unitName); Serial.print(" - TN "); Serial.print(cycleCount); Serial.print(" - ");
+  Serial.print("UV Lamp Relay ON. Please stand clear for ");
+  Serial.print(sanitationTime); Serial.println(" minutes.");
+
+  relay = HIGH;
+  red = 255;
+  blue = 0;
+  green = 0;
+
+  digitalWrite(relayPin, relay);
+  LEDU;
+
+  do {
+    for (red = 255; red >= 05; red--) {//DONT CHANGE RED LED VALUES
+      button = digitalRead(buttonPin);
+      motion = digitalRead(motionPin);
+      if (motion == 1) {
+        safteyTriggerMotion = true;
+      }
+      if (button == 1) {
+        safteyTriggerButton = true;
+      }
+      LEDU;
+      delay(8);//DONT CHANGE DELAY VALUE
+      if (safteyTriggerMotion + safteyTriggerButton >= 1) {
+        break;
+      }
+    }
+    for (red = 05; red <= 254; red++) {//DONT CHANGE RED LED VALUES
+      button = digitalRead(buttonPin);
+      motion = digitalRead(motionPin);
+      if (motion == 1) {
+        safteyTriggerMotion = 1;
+      }
+      if (button == 1) {
+        safteyTriggerButton = 1;
+      }
+      LEDU;
+      delay(8);//DONT CHANGE DELAY VALUE
+      if (safteyTriggerMotion + safteyTriggerButton >= 1) {
+        break;
+      }
+    }
+    if (safteyTriggerMotion + safteyTriggerButton >= 1) {
+      countUp = sanitationForm;
+    }
+    else {
+      countUp++;
+    }
+  }
+  while (countUp < sanitationForm);
+
+  if (safteyTriggerMotion == 1) {
+    countUp = 0;
+    safteyTriggerMotion = 0;
+    motionFault();
+  }
+  else if (safteyTriggerButton == 1) {
+    countUp = 0;
+    safteyTriggerButton = 0;
+    buttonFault();
+  }
+  else {
+    relay = LOW;
+    digitalWrite(relayPin, relay);
+    Serial.print(unitName); Serial.print(" - TN "); Serial.print(cycleCount); Serial.print(" - ");
+    Serial.print("UV Cleaning Cycle was completed without error at ");
+    Serial.print(dt.year);   Serial.print("-");
+    Serial.print(dt.month);  Serial.print("-");
+    Serial.print(dt.day);    Serial.print(" ");
+    Serial.print(dt.hour);   Serial.print(":");
+    Serial.print(dt.minute); Serial.print(":");
+    Serial.print(dt.second); Serial.println("");
+    resetUnitToStart();
+  }
+}
+
+
+
+void motionFault() {
+  ERROR03;
+  relay = LOW;
+  digitalWrite(relayPin, relay);
+  tone(soundPin, toneHigh);
+  delay(4000);
+  noTone(soundPin);
+  delay(500);
+  cancledUVCycle();
+}
+
+void buttonFault() {
+  ERROR04;
+  relay = LOW;
+  digitalWrite(relayPin, relay);
+  tone(soundPin, toneHigh);
+  delay(2000);
+  noTone(soundPin);
+  delay(500);
+  resetUnitToStart();
+}
+
+
 
 void cancledUVCycle() {
   button = 0;
-  button = digitalRead(buttonPin);
-  while(button == 1){
-    red = rLow;
-    blue = 0;
-    green = 0;
-    LEDU;
+  int hourGlass = 0;
+  do {
+    for (hourGlass = 0; hourGlass <= 500; hourGlass++) {
+      red = 50;
+      blue = 0;
+      green = 0;
+      LEDU;
+      button = digitalRead(buttonPin);
+      if (button == 1) {
+        break;
+      }
+      delay(1);
+    }
+    for (hourGlass = 500; hourGlass >= 0; hourGlass--) {
+      red = 240;
+      blue = 0;
+      green = 0;
+      LEDU;
+      button = digitalRead(buttonPin);
+      if (button == 1) {
+        break;
+      }
+      delay(1);
+    }
     button = digitalRead(buttonPin);
-    delay(500);
-    red = rHigh;
-    blue = 0;
-    green = 0;
-    LEDU;
-    button = digitalRead(buttonPin);
-    delay(500);
-  }
+  } while (button != 1);
+
+  //beep beep
+  tone(soundPin, toneHigh);
+  delay(100);
+  noTone(soundPin);
+  delay(100);
+  tone(soundPin, toneHigh);
+  delay(100);
+  noTone(soundPin);
+  delay(100);
+  Serial.print("TN ");
+  Serial.print(cycleCount);
+  Serial.println(" cancled. Returning to Standby Mode");
+  delay(1000);
   resetUnitToStart();
 }
-  
-  //Rest Int
-void resetUnitToStart(){
+
+
+void resetUnitToStart() {
+  countUpStartUVCycle = 0;
   button = 0;
   relay = LOW;
   digitalWrite(relayPin, relay);
-  tone(soundPin, tonerL, 500);
+  tone(soundPin, toneLow, 500);
   delay(1000);
   noTone(soundPin);
   motion = 0;
@@ -268,64 +507,9 @@ void resetUnitToStart(){
   green = 100;
   blue = 0;
   LEDU;
+  cycleCount++;
+  countUpSensorCheck = 0;
+  Serial.println(" ");
+  Serial.println(" ");
   loop();
-}
-
-
-void uvLampStrike() {
-  
-  long int currentSanitationTime = 0;
-  long int startSanitationTime = 0;
-  long int sanitaionForm = (sanitationTime);
-  int safteyTrigger = 0;
-  long int countUp = 0;
-  
-  relay = HIGH;
-  red = 255;
-  blue = 0;
-  green = 0;
-  digitalWrite(relayPin, relay);
-  LEDU;
-  do {
-    for (red = 255; red >= 05; red--) {
-      buttonU;
-      motion = digitalRead(motionPin);
-      if(motion == 1){
-        safteyTrigger = 1;
-      }
-      if(button == 1){
-        safteyTrigger = 1;
-      }
-      LEDU;
-      buttonU;
-      buttonBreakaway;
-      delay(8);
-      }
-    for (red = 05; red <= 254; red++) {
-      buttonU;
-      motion = digitalRead(motionPin);
-      if(motion == 1){
-        safteyTrigger = 1;
-      }
-      if(button == 1){
-        safteyTrigger = 1;
-      }
-      LEDU;
-      buttonU;
-      buttonBreakaway;
-      delay(8);
-      if(safteyTrigger == 1){
-          break;
-      
-      }
-    }
-    countUp++;
-  }
-  while (countUp != sanitaionForm);
-  if(safteyTrigger == 1){
-    cancledUVCycle();
-  }
-  else {
-    resetUnitToStart();
-  }
 }
