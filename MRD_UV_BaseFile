@@ -13,9 +13,9 @@ int buttonPressTime = 4;//Default value is 4. Must be >2
 int delayTime = 4; //in Seconds. This is the time to leave the room once button has been triggered =,
 int numberOfTrips = 3;// default value is 3
 
-//UV Lamp Strikes
+//UV Peramiters
 int sanitationTime = 1; //in Minutes. default value is 15
-
+int betweenDays = 7; //Number of recommended days between cleaning cycles
 
 
 //DO NOT EDIT BELOW THIS LINE
@@ -23,16 +23,15 @@ int sanitationTime = 1; //in Minutes. default value is 15
 
 //Libraries
 #include <Wire.h>
-#include <DS3231.h>
 #include <EEPROMex.h>
+#include "RTClib.h"
+/*#include <TimeLib.h>*/
 
 //Setting up time clock
-DS3231 clock;
-RTCDateTime dt;
+RTC_DS1307 dt;
 
 //defines
 #define LEDU analogWrite(rLEDPin, red); analogWrite(gLEDPin, green);  analogWrite(bLEDPin, blue);
-#define timeAndDate Serial.print(dt.year); Serial.print("-"); Serial.print(dt.month); Serial.print("-"); Serial.print(dt.day); Serial.print(" "); Serial.print(dt.hour); Serial.print(":"); Serial.print(dt.minute); Serial.print(":"); Serial.println(dt.second);
 
 //NON EDITABLE VARIABLES//
 //const ints for Pin Mode Setup
@@ -45,6 +44,8 @@ const int soundPin = 6;
 const int motionPin = 7;
 
 //EEPROM Reading and Writing ints
+int eepromGo = false;
+
 long cycleCount;//Number of times Unit has run a UV Cleaning
 int eepromCycleAddressStorage = 0; //Takes up 4 Bytes. Next Storage location is 4
 int eepromLastCompleteCycleAddressStorage = 4; //Takes up 4 Bytes. Next storage location is 8
@@ -75,20 +76,33 @@ int safteyTriggerButton = 0;
 void setup() {
   //begin Serial Communication
   Serial.begin(9600);
+#ifndef ESP8266
+  while (!Serial); // wait for serial port to connect. Needed for native USB
+#endif
 
   //Set Date and Time and Report
-  clock.begin();
-  clock.setDateTime(__DATE__, __TIME__);
-  dt = clock.getDateTime();
+  if (! dt.begin()) {
+    Serial.println("Couldn't find RTC");
+    Serial.flush();
+    abort();
+  }
+  if (! dt.isrunning()) {
+    Serial.println("Clock isn't Synced. Syncing now.");
+    dt.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  }
+  DateTime now = dt.now();
   Serial.print(unitName);
-  Serial.print(" - Booting at "); timeAndDate;
+  Serial.print(" - Booting at ");
+  Serial.println(now.toString("YYYY-MM-DD hh:mm:ss"));
 
-  //Update the Number of cycles ran from Local Memory
+  //Update Ints from EEPROM Local Memory
+  if (eepromGo == true) {
   delay(20);
   cycleCount = EEPROM.readLong(eepromCycleAddressStorage);
   delay(20);
   lampHours = EEPROM.readLong(eepromLampHourAddressStorage);
   delay(20);
+  }
 
   //Set Pin Modes
   pinMode(gLEDPin, OUTPUT);
@@ -127,29 +141,33 @@ void setup() {
 }
 
 void loop() {
+
+  //String for Command Input
   String input = "";
+
   do {
     button = digitalRead(buttonPin);
     delay(10);
-    dt = clock.getDateTime();
+    DateTime now = dt.now();
 
-    //Serial Communication for Back Door
+    //Serial Communication for Back Door Diag
     if (Serial.available() > 0) {
       input = Serial.readString();
     }
 
     //First Button Press
     if (button == 1 && lastButton == 0) {
-      timeSecond = dt.unixtime;
+      timeSecond = now.unixtime();
       delay(5);
       Serial.print(unitName);
-      Serial.print(" - Button pressed at "); timeAndDate;
+      Serial.print(" - Button pressed at ");
+      Serial.println(now.toString("YYYY-MM-DD hh:mm:ss"));
       lastButton = 1;
     }
 
     //Held
     if (button == 1 && lastButton == 1) {
-      timeFirst = dt.unixtime;
+      timeFirst = now.unixtime();
       if ((timeFirst - timeSecond) >= buttonPressTime) {
         hold = 1;
         tone(soundPin, toneLow);
@@ -180,7 +198,8 @@ void loop() {
       else {
         Serial.print(unitName);
         Serial.print(" - Beginning UVC Cycle");
-        Serial.print(" at "); timeAndDate;
+        Serial.print(" at ");
+        Serial.println(now.toString("YYYY-MM-DD hh:mm:ss"));
         timeFirst = 0;
         timeSecond = 0;
         red = 0;
@@ -399,25 +418,21 @@ void uvLampStrike() {
     buttonFault();
   }
   else {
+    DateTime now = dt.now();
     relay = LOW;
     digitalWrite(relayPin, relay);
-
     Serial.print(unitName + " - TN" + cycleCount);
     Serial.print(" - UV Cleaning Cycle was completed without error at ");
-    Serial.print(dt.year + "-");
-    Serial.print(dt.month + "-");
-    Serial.print(dt.day + "-");
-    Serial.print(dt.hour + ":");
-    Serial.print(dt.minute + ":");
-    Serial.println(dt.second);
-
+    Serial.println(now.toString("YYYY-MM-DD hh:mm:ss"));
+    
     //EEPROM Storage
-    dt = clock.getDateTime();
-    EEPROM.writeLong(eepromLastCompleteCycleAddressStorage, dt.unixtime);
+    if (eepromGo == true) {
+    delay(20);
+    EEPROM.writeLong(eepromLastCompleteCycleAddressStorage, now.unixtime());
     delay(20);
     EEPROM.writeLong(eepromLampHourAddressStorage, (lampHours + round((cycleCount * 4) / 60))); //in Minutes
     delay(20);
-
+    }
     resetUnitToStart();
   }
 }
@@ -509,8 +524,10 @@ void resetUnitToStart() {
   //Update Cycle Count to EEPROM
   delay(20);
   cycleCount++;
+  if (eepromGo == true) {
   EEPROM.writeLong(eepromCycleAddressStorage, cycleCount++);
   delay(20);
+  }
 
   countUpSensorCheck = 0;
   Serial.println(" ");
@@ -522,17 +539,19 @@ void backDoorClose() {
   Serial.println("________________________________________");
   Serial.println("Unit Name: " + unitName);
   Serial.print("Number of Cycles Run: "); Serial.println(cycleCount);
+  if (eepromGo == true) {
   Serial.print("Time since last cycle: "); Serial.println(EEPROM.readLong(eepromLastCompleteCycleAddressStorage));
   Serial.print("Lamp Hours: "); Serial.println(EEPROM.readLong(eepromLampHourAddressStorage));
-  Serial.print("Enter 'ESC' to return to Standby Mode");
+  }
   Serial.flush();
-  /*String input = "";
-  do {
+  /*Serial.print("Enter 'ESC' to return to Standby Mode");
+  String input = "";
+    do {
     if (Serial.available() > 0) {
       input = Serial.readString();
     }
-  }
-  while (input != "ESC");*/
+    }
+    while (input != "ESC");*/
   Serial.println("Returning to Standby");
   loop();
 }
